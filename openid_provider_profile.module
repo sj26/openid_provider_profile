@@ -1,0 +1,238 @@
+<?php
+// $Id$
+
+/**
+ * Map AX schemas defined in OpenID Provider AX into a grouped options array for form elements.
+ * 
+ * @returns Grouped array for use in select form elements.
+ * @see openid_provider_ax_schema_definitions
+ */
+function openid_provider_profile_ax_options() {
+  static $options = null;
+  
+  if ($options === null) {
+    // Default option
+    $options = array('' => '<none>');
+    
+    // Extract options from openid_provider_ax_schema_definitions() with one
+    // level of option groups corresponding to section name.
+    foreach (openid_provider_ax_schema_definitions() as $key => $attribute) {
+      if (!empty($attribute['section'])) {
+        $options[$attribute['section']][$key] = $attribute['label'];
+      } else {
+        $options[$key] = $attribute['label'];
+      }
+    }
+  }
+  
+  return $options;
+}
+
+/**
+ * Gets or sets all profile field attribute exchange mappings.
+ * 
+ * @see openid_provider_profile_field()
+ */
+function openid_provider_profile_fields($fields = null) {
+  if ($fields == null) {
+    $fields = variable_get('openid_provider_profile_fields', array());
+  }
+  else {
+    variable_set('openid_provider_profile_fields', $fields);
+  }
+  return $fields;
+}
+
+/**
+ * Gets, sets or removes a profile field attribute exchange mapping.
+ * 
+ * Omitting a value gets the current setting.
+ * Providing a value sets it.
+ * Providing an empty string ('') removes it.
+ * 
+ * @see openid_provider_profile_fields()
+ */
+function openid_provider_profile_field($fid, $ax = null) {
+  $fields = openid_provider_profile_fields();
+  if ($ax === null) {
+    $ax = !empty($fields[$fid]) ? $fields[$fid] : null;
+  }
+  else {
+    if (!empty($ax)) {
+      $fields[$fid] = $ax;
+    }
+    else if (isset($fields[$fid])) {
+      unset($fields[$fid]);
+    }
+    openid_provider_profile_fields($fields);
+  }
+  return $ax;
+}
+
+/**
+ * Implementation of hook_form_alter(): profile_field_form.
+ * 
+ * Alters profile field form to add attribute exchange type.
+ * 
+ * @see profile_field_form()
+ * @see openid_provider_profile_profile_field_form_validate()
+ * @see openid_provider_profile_profile_field_form_submit()
+ */
+function openid_provider_profile_form_profile_field_form_alter(&$form, &$form_state) {
+  $form['openid'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('OpenID Settings'),
+    '#tree' => TRUE,
+    '#collapsible' => TRUE,
+    // set '#collapsed' later...
+  );
+  $form['openid']['ax'] = array(
+    '#type' => 'select',
+    '#title' => t('OpenID attribute'),
+    '#default_value' => !empty($form['name']) ? openid_provider_profile_field($form['name']['#value']) : '',
+    '#options' => openid_provider_profile_ax_options(),
+    '#description' => t('To enable sharing this profile field during OpenID Attribute Exchange (AX), select a type.'),
+  );
+  
+  // Collapse by default unless a value has already been assigned to an existing field.
+  $form['openid']['#collapsed'] = empty($form['openid']['ax']['#default_value']);
+  
+  // Make sure this appears late in the form, and submit is below it.
+  $form['openid']['#weight'] = 80;
+	if (!isset($form['submit']['#weight']) || $form['submit']['#weight'] <= $form['openid']['#weight']) {
+	  $form['submit']['#weight'] = $form['openid']['#weight'] + 20;
+	}
+  
+  // Add our submit handler.
+  $form['#submit'][] = 'openid_provider_profile_profile_field_form_submit';
+}
+
+/**
+ * Saves profile field attribute exchange type, or removes it.
+ * 
+ * @see profile_field_form_submit()
+ */
+function openid_provider_profile_profile_field_form_submit(&$form, &$form_state) {
+  if (!empty($form_state['values']['name']) && isset($form_state['values']['openid']['ax'])) {
+    openid_provider_profile_field($form_state['values']['name'], $form_state['values']['openid']['ax']);
+  }
+}
+
+/**
+ * Alter profile field delete form to remove attribute exchange mapping, if present.
+ * 
+ * @see profile_field_delete()
+ * @see openid_provider_profile_profile_field_delete_submit()
+ */
+function openid_provider_profile_form_profile_field_delete_alter(&$form, &$form_state) {
+	// Fetch the name of the profile field.
+	$name = db_fetch_object(db_query("SELECT name FROM {profile_fields} WHERE fid = %d", $form['fid']['#value']))->name;
+	
+	// If this is currently mapped to OpenID, add out submit handler.
+	if (openid_provider_profile_field($name)) {
+		// We preserve the profile field name here in case the
+		// database record is gone by the time we process it.
+		// form['storage'] doesn't work on the first step or
+		// we'd store it there.
+		$form['openid_provider_profile_unset'] = array('#type' => 'hidden', '#value' => $name);
+		$form['#submit'][] = 'openid_provider_profile_profile_field_delete_submit';
+	}
+}
+
+/**
+ * Remove profile field attribute exchange type for deleted profile field.
+ * 
+ * @see profile_field_delete_submit()
+ */
+function openid_provider_profile_profile_field_delete_submit(&$form, &$form_state) {
+	if (!empty($form_state['values']['openid_provider_profile_unset'])) {
+		openid_provider_profile_field($form_state['values']['openid_provider_profile_unset'], '');
+	}
+}
+
+/**
+ * Adds profile fields to an OpenID attribute exchange.
+ * 
+ * @see openid_provider_ax()
+ */
+function openid_provider_profile_openid_provider_ax($op, $attributes, $request) {
+	global $user;
+	
+	// During an AX fetch_response we want to return all available attribtue values
+	// Response parameters as per:
+  //   http://openid.net/specs/openid-attribute-exchange-1_0.html#fetch_response
+ 
+	if ($op == 'load') {
+		// Discover ax namespace alias and calculate parameter prefix
+		$ax_alias = openid_provider_ax_alias($attributes);
+		$ax_prefix = 'openid'.$ax_alias;
+		
+		// Prefix for types
+		$ax_prefix_type = $ax_prefix.'type.';
+		$ax_prefix_type_len = strlen($ax_prefix_type);
+				
+		// Look for requested attribtue types and their aliases
+		// We don't support multiple aliases for the same attribute type
+		foreach ($attributes as $key => $ax_type) {
+			if (substr($key, 0, $ax_prefix_type_len) == $ax_prefix_type) {
+				$ax_aliases[$ax_type] = substr($key, $ax_prefix_type_len);
+			}
+		}
+
+		// The values we're collecting
+		$values = array();
+
+		// See if the types we offer were requested and populate return attributes
+		foreach (openid_provider_profile_fields() as $field => $ax_type) {
+			if (array_key_exists($ax_type, $ax_aliases)) {
+				// Make sure the profile's loaded by now
+				profile_load_profile($user);
+				
+				// Ignore missing fields
+				if (!isset($user->$field)) {
+					continue;
+				}
+				
+				// Grab the correct profile field value
+				$value = $user->$field;
+				
+				// Have we already got one value? Arrayify!
+				// This means we can supply multiple values for a single attribute alias
+				if (array_key_exists($ax_type, $values)) {
+					if (is_array($values[$ax_type])) {
+						$values[$ax_type][] = $value;
+					} else {
+						$values[$ax_type] = array($values[$ax_type], $value);
+					}
+				} else {
+					$values[$ax_type] = $value;
+				}
+			}
+		}
+		
+		// The response parameters we're returning
+		$response = array();
+		
+		// Response parameter prefixes for individual values and multi-valued counts
+		$ax_prefix_value = $ax_prefix.'value.';
+		$ax_prefix_count = $ax_prefix.'count.';
+		
+		// Look at each value and expand it into a response parameter
+		foreach ($values as $ax_type => $value) {
+			// Multi-valued attributes are expanded
+			if (is_array($value)) {
+				foreach ($value as $count => $subvalue) {
+					$response[$ax_prefix_value.$ax_aliases[$ax_type].".$count"] = $subvalue;
+				}
+				
+				$response[$ax_prefix_count.$ax_aliases[$ax_type]] = count($value);
+			} else {
+				// Single-values are simple
+				$response[$ax_prefix_value.$ax_aliases[$ax_type]] = $value;
+			}
+		}
+		
+		// The hook collects response parameters.
+		return $response;
+	}
+}

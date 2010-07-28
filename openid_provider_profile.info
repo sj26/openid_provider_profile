@@ -1,0 +1,9 @@
+; $Id$
+name = "OpenID Provider Profile"
+description = "OpenID Provider Profile maps user profile fields for OpenID attribute exchange."
+core = 6.x
+version = 1.x
+dependencies[] = profile
+dependencies[] = openid_provider
+dependencies[] = openid_provider_ax
+package = "OpenID"

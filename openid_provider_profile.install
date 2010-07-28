@@ -1,0 +1,27 @@
+<?php
+// $Id:
+
+/**
+ * Implementation of hook_install().
+ */
+function openid_provider_profile_install() {
+	// If the setting doesn't exist...
+	if (variable_get('openid_provider_profile_fields', FALSE) === FALSE) {
+		// Set some defaults from the user account.
+		variable_set('openid_provider_profile_fields', array(
+			'name' => 'http://axschema.org/namePerson/friendly',
+			'mail' => 'http://axschema.org/contact/email',
+			'language' => 'http://axschema.org/pref/language',
+			'timezone_name' => 'http://axschema.org/pref/timezone',
+		));
+	}
+}
+
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function openid_provider_profile_uninstall() {
+  // Remove variable
+  variable_del('openid_provider_profile_fields');
+}
