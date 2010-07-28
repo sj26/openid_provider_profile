@@ -1,5 +1,3 @@
-$Id$
-
 OPENID PROVIDER PROFILE
 =======================
 
@@ -16,6 +14,16 @@ DEPENDENCIES
 Module relies on the OpenID Provider Module and OpenID Provider AX Module.
 
 Compatible with Drupal 6.x
+
+USAGE
+-----
+
+Username, email, timezone and language are all available for attribute exchange by default. Edit a profile field to assign it an OpenID attribute exchange type to make it available also.
+
+TODO
+----
+
+ * Configure default user attribute exchange types.
 
 CREDITS
 -------
